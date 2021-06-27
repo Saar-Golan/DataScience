@@ -1,0 +1,551 @@
+---
+title: "HW2 BIU-DS 12"
+Author: Saar Golan^1,2^
+output: html_document
+---
+
+# 2 EDA
+
+#Initialize necessary environment:
+
+```{r setup, include=FALSE, cache = FALSE}
+library(knitr)
+library(rmarkdown)
+library(ggplot2)
+library(dplyr)
+library(DescTools)
+library(car)
+library(psych)
+library(moments)
+library(e1071)
+library(nortest)
+library(corrplot)
+library(purrr)
+library(Hmisc)
+library(PerformanceAnalytics)
+library(RcmdrMisc)
+library(Rmisc)
+library(GGally)
+library(imputeTS)
+library("pheatmap")
+library(cocor)
+library(mice)
+
+# setting working directory
+opts_knit$set(root.dir = "H:/Google_drive/Google Drive/Study/Data Science/BIU - DS12/HW2")
+rm()
+options(max.print=1000000) #increase max. print length
+```
+
+Import data:
+
+```{r}
+df <- read.csv("flat_file.csv",header = T)
+```
+
+# 2.1 Descriptive analysis:
+
+Numerical variables:
+
+```{r}
+df.num<-df[c(2,4,6,8,13,14,19:20,21,27:32,39:43,63:84)]
+desc.num<-sapply(df.num, function(x) c(validN = sum(complete.cases(x)),
+                             NAs=7375-sum(complete.cases(x)),
+                             means = mean(na.omit(x)),
+                             medi = median(na.omit(x)),
+                             std = sd(na.omit(x)),
+                             CI0.95 = CI(na.omit(x), ci=0.95),
+                             minx = min(na.omit(x)),
+                             maxx = max(na.omit(x)),
+                             rangex= max(na.omit(x))-min(na.omit(x)), 
+                             perc05 = quantile(na.omit(x), 0.05),
+                             perc95 = quantile(na.omit(x), 0.95),
+                             skews = skewness(na.omit(x)),
+                             kurt = kurtosis(na.omit(x)))
+)
+
+knitr::kable(round(desc.num[,1:7]),2)
+knitr::kable(round(desc.num[,8:16]),2)
+knitr::kable(round(desc.num[,17:25]),2)
+knitr::kable(round(desc.num[,26:34]),2)
+knitr::kable(round(desc.num[,35:42]),2)
+
+```
+
+Categorical variables:
+
+```{r}
+df.cat<-df[c(3,7,14:15,17)]
+desc.cat<-sapply(df.cat, function(x) c(validN=sum(complete.cases(x)),
+                             NAs=7375-sum(complete.cases(x)),
+                             mod = Mode(x),
+                             Tab=table(x))
+       )
+knitr::kable(desc.cat,2)
+```
+
+Dichotomous variables:
+
+```{r}
+df.dich<-df[c(9:12,16,22:26,33:38,44:62)]
+desc.dich<-sapply(df.dich, function(x) c(validN=sum(complete.cases(x)),
+                             NAs=7375-sum(complete.cases(x)),
+                             mod = Mode(x),
+                             Tab=table(x))
+       )
+knitr::kable(desc.dich,2)
+```
+
+
+
+
+#2.2 Graphs:
+
+Histograms for the numerical variables:
+
+```{r}
+df.num.mat<-data.matrix(df.num)
+for (x in 1:length(df.num)) 
+  {hist(df.num.mat[,x], breaks=30, main = colnames(df.num.mat)[x])
+  plot(density(na.omit(df.num.mat[,x])))}
+```
+
+Normality tests for the numerical variables:
+(Using KS because Shapiro is limited to 5000!)
+
+```{r}
+x_sample <- rnorm(5000)
+sapply(df.num, function(x) c(print(ks.test(x_sample,na.omit(x),alternative = "two.sided")),
+                             plot(ecdf(na.omit(x))))
+)
+```
+
+The histograms and the normality tests show that the numerical variables are not normally distributed and that there are many outliers.
+
+Bar plots for the categorical/dichotomous variables:
+
+```{r}
+par(mar = c(8, 3, 3, 2))  #bot, left, top, right
+par(oma = c(3, 3, 3, 3))
+barplot(sapply(df.dich, function(x) table(-x)/nrow(df.dich)),col=c("black","white"), las=2, main = "Dichtomous variables, Black=1, White = 0 (Some NAs present)")
+
+#Spcific segmentations:
+#web,poster,tag
+barplot(sapply(df.dich[2:4], function(x) table(-x)/nrow(df.dich)),col=c("black","white"), las=2)
+#Languages:
+barplot(sapply(df.dich[6:10], function(x) table(-x)/nrow(df.dich)),col=c("black","white"), las=2)
+#genre
+barplot(sapply(df.dich[6:10], function(x) table(-x)/nrow(df.dich)),col=c("black","white"), las=2)
+#female-male
+barplot(sapply(df.dich[11:16], function(x) table(-x)/nrow(df.dich)),col=c("black","white"), las=2)
+
+
+barplot(table(df.cat$original_language),main = "original_language")
+barplot(table(df.cat$runtime_cat),main = "runtime_cat")
+barplot(table(df.cat$release_day),main = "release_day")
+barplot(table(df.cat$release_month),main = "release_month")
+barplot(table(df.cat$release_year),main = "release_year")
+```
+
+Most movies were produced by english-talking crews.
+Majority of movies are medium-length.
+More leading actors are male.
+More movies are produced over the years.
+
+
+#2.3 Correlations:
+
+Scatter plots for all numerical variables combinations
+
+```{r}
+
+df.num.colnms = colnames(df.num)
+
+count=0
+for(i in 1:(ncol(df.num)-1)) 
+  for (j in i:ncol(df.num))
+  {       # for-loop over columns
+  X<- df.num[ , i]
+  Y<- df.num[ , j]
+    if (i!= j) {
+  print(c(i,j))
+  print(ggplot(df.num, aes(X, Y)) + geom_point() + geom_smooth(method = "lm") +
+          xlab(as.character(df.num.colnms[i])) + ylab(as.character(df.num.colnms[j])))
+  rm(X, Y)
+    }
+    count=count+1
+}
+```
+
+Generate correlations:
+
+```{r}
+#removing irrelevant variables from database:
+df.cor<-(df[-c(1,3,5,7,11,14:15,18)])
+
+#perform correlation with P value and Valid numbers
+rcor.adj<-rcorr.adjust(as.matrix(df.cor),type="spearman",use="pairwise.complete.obs")
+cat("\n Correlations:")
+knitr::kable(rcor.adj$R$r)
+
+cat("\n P values:")
+knitr::kable(rcor.adj$R$P)
+
+cat("\n Number of observations:")
+knitr::kable(rcor.adj$R$n)
+
+#Two methods to generate the correlation matrix are provided
+#Both methods generate too many variables for the plot to show a clear image
+
+#PerformanceAnalytics::chart.Correlation(df.cor, histogram=TRUE,method = "spearman", pch=19)
+#ggpairs(df.cor)
+
+#Also possible to use:
+#pairs(df.cor)
+#corrplot(df.cor, method="number")
+
+```
+
+It is possible to segment the revenue to say 10 levels and then perform a Xi-Square tests for the categorical variables correlations.
+
+
+#2.4 The target variable
+
+See above for histogram. Revenue is not normally distributed. Most movies provide a very small revenue and than we have a very long tail towards a few movies providing enormous revenues.
+
+##Revenue by numeric variables:
+
+```{r}
+for(i in 1:(ncol(df.num))) {       # for-loop over columns
+  #revenue vs. all
+  X<- df.num[ , i]
+  print(i)
+  print(ggplot(df.num, aes(X, df.num[ , 4])) + geom_point() + geom_smooth(method = "lm"))
+  rm(X)
+}
+```
+
+##Revenue by categoric variables:
+
+```{r}
+max_revenue=max(df$revenue)
+
+ggplot(data=df, mapping = aes(x=as.factor(original_language), y=revenue)) + 
+  geom_boxplot() + geom_point() + theme_bw() +
+  labs(y ="revenue", x="original_language", title = "revenue as a function of original_language") + 
+  stat_boxplot(geom="errorbar",width=0.2) + coord_cartesian(ylim = c(0,1e8))
+
+ggplot(data=df, mapping = aes(x=as.factor(runtime_cat), y=revenue)) + 
+  geom_boxplot() + geom_point() + theme_bw() +
+  labs(y ="revenue", x="runtime_cat", title = "revenue as a function of runtime_cat") + 
+  stat_boxplot(geom="errorbar",width=0.2) + coord_cartesian(ylim = c(0,2e8))
+
+ggplot(data=df, mapping = aes(x=as.factor(release_year), y=revenue)) + 
+  geom_boxplot() + geom_point() + theme_bw() +
+  labs(y ="revenue", x="release_year", title = "revenue as a function of release_year") + 
+  stat_boxplot(geom="errorbar",width=0.2) + coord_cartesian(ylim = c(0,1e8))
+
+ggplot(data=df, mapping = aes(x=as.factor(release_month), y=revenue)) + 
+  geom_boxplot() + geom_point() + theme_bw() +
+  labs(y ="revenue", x="release_month", title = "revenue as a function of release_month") + 
+  stat_boxplot(geom="errorbar",width=0.2) + coord_cartesian(ylim = c(0,1e8))
+
+ggplot(data=df, mapping = aes(x=as.factor(release_day), y=revenue)) + 
+  geom_boxplot() + geom_point() + theme_bw() +
+  labs(y ="revenue", x="release_day", title = "revenue as a function of release_day") + 
+  stat_boxplot(geom="errorbar",width=0.2) + coord_cartesian(ylim = c(0,1e8))
+```
+
+The variables most correlated with revenue are budget and leading actors previous movie count (total and even more 5 years). These trends are strongly affected by outliers.
+It is probable that correlation between leading actors and budget mediate the final correlation with revenue.
+Some common languages (e.g., English and Japanese) indicate a larger revenue but only compared with less common languages. It is not a clear trend (statistically significant).
+Later years suggest increased revenue but this is also not a clear trend. 
+
+
+
+#2.5 Outliers
+
+For numeric variables outliers are found outside the confidence interval (see procedure below). The graphs above (particularly Box plots but also scatter plots) show a lot of outliers. 
+In a rigorous manner:
+
+```{r}
+#For all variables:
+boxplot(df.num)
+#Due to very large range differences it is better to view the data per variable:
+lapply(1:ncol(df.num), function(i) boxplot(df.num.mat[, i], main = colnames(df.num.mat)[i]))
+```
+
+Outliers can be found for nearly all variables. They often represent very successful movies with high budgets and revenues and with a lot of actors (typically celebrities) that have a rich performance history (a lot of past movies with high revenues). The hit movies also have bigger crew numbers than usual.
+
+The barplots above for the categorical and dichotomous variables indicate some parameters  have very low categorical frequencies (also 0 or 1). These 'rare' categories can also be considered as outliers.
+
+
+#2.6 Missing data
+
+All missing variables are calculated in question 2.1 (desc.num/cat/dich).
+There is a lot of data missing from the numerical variables revenue - 4382 and producers count - 395. A lot of data is missing from the leading actors previous revenue columns (2315, 2801...) and little data (up to 34) from the department columns.
+There is no data missing from the categorical variables.
+There is little data missing from the dichotomous variables under the leading actors gender (321, 156, 162).
+
+
+#2.7 Missing data matrix
+
+```{r}
+df.mat<-data.matrix(df)
+df.mat[!is.na(df.mat)] = 0  #There is data available
+df.mat[is.na(df.mat)] = 1   #NA value
+
+par(mar = c(8, 2, 3, 2))  #bot, left, top, right
+par(oma = c(3, 3, 3, 3))
+heatmap(df.mat, scale = "none")
+#pheatmap(df.mat, cutree_rows = 4)  #improved version
+```
+
+
+#3 Data cleansing
+
+#3.1 Distributions with and without outliers
+
+(According to explanations in class we are to address only numeric variables)
+
+## 1 Histograms with and without outliers:
+
+```{r}
+df.num.mat<-data.matrix(df.num)
+for (x in 1:length(df.num)) 
+  {# Find the 25th and the 75th percentile of the dataset
+  rm(eliminated, up, low, Q, iqr)
+  Q<- quantile(df.num.mat[,x], probs = c(0.25,0.75), na.rm = TRUE)
+  # Find the difference of the 75th and 25th percentiles
+  iqr <- IQR(df.num.mat[,x], na.rm = TRUE)
+  # Find the cut-off ranges
+  up <-  Q[2]+1.5*iqr # Upper Range  
+  low <- Q[1]-1.5*iqr # Lower
+  
+  eliminated<- subset(df.num.mat[,x],
+                      ((df.num.mat[,x] > low) & (df.num.mat[,x] < up)))
+  #remove cases of empty subset
+  if (length(eliminated) != 0) {
+    print(x)
+    hist(df.num.mat[,x], breaks=30, main = colnames(df.num.mat)[x])
+    hist(eliminated, breaks=30, main = 'No outliers')
+    plot(density(na.omit(df.num.mat[,x])), main = colnames(df.num.mat)[x])
+    plot(density(eliminated), main = 'No outliers')
+    }
+}
+```
+
+Variables without outliers:
+9, 27, 30, 32:34, 36:38, 40:42
+
+```{r}
+colnames(df.num.mat)[c(9, 27, 30, 32:34,36:38, 40:42)]
+```
+
+Variables with more visible changes in histograms/distributions after removal of outliers include: popularity, keyword_cnt, sw_collection
+
+
+## 2 Scatter plot with and without outliers
+
+```{r}
+
+#Define matrix with variables having outliers
+df.num.mat1<-data.matrix(df.num)[,c(1:8,10:26,28:29,31,35,39)]
+
+for (x in 1:ncol(df.num.mat1))
+  {#Print scatter with outliers
+  print(ggplot(df.num, aes(df.num.mat1[ ,x], df.num.mat1[ , 4])) + geom_point() + 
+          geom_smooth(method = "lm")+ggtitle(colnames(df.num.mat1)[x]))
+  # Find the 25th and the 75th percentile of the dataset
+  rm(eliminated, eliminated_rev, up, low, Q, iqr)
+  Q<- quantile(df.num.mat1[,x], probs = c(0.25,0.75), na.rm = TRUE)
+  # Find the difference of the 75th and 25th percentiles
+  iqr <- IQR(df.num.mat1[,x], na.rm = TRUE)
+  # Find the cut-off ranges
+  up <-  Q[2]+1.5*iqr # Upper Range  
+  low <- Q[1]-1.5*iqr # Lower
+  
+  eliminated<- subset(df.num.mat1[,x],
+                      ((df.num.mat1[,x] > low) & (df.num.mat1[,x] < up)))
+  eliminated_rev<- subset(df.num.mat1[,4],
+                      ((df.num.mat1[,x] > low) & (df.num.mat1[,x] < up)))
+  #remove cases of empty subset
+  if (length(eliminated) != 0) {
+    print(x)
+    print(ggplot(data.frame(eliminated), aes(eliminated, eliminated_rev)) + geom_point() + 
+            geom_smooth(method = "lm")+ggtitle('eliminated'))
+    #plot(eliminated, eliminated_rev)
+    }
+}
+```
+
+We can see differences between scatter plots containing and not containing original outliers.
+Outliers in independent variables affect the range of the dependent variable (revenue)
+Prominent changes are visible for:
+Budget, popularity, keyword_cnt, some of the depart_* variables
+
+## 3 Comparing the correlations before and after removing outliers:
+
+```{r}
+for (x in 1:ncol(df.num.mat1))
+  {
+  #Clean data
+  rm(eliminated, eliminated_rev, up, low, Q, iqr, cor_with, cor_elim)
+  #Find correlation with outliers
+  cor_with<-cor.test(df.num.mat1[,x],df.num.mat1[,4], method = "spearman",
+                     alternative = "two.sided", exact = FALSE)
+  
+  #Find correlation without outliers:
+        # Find the 25th and the 75th percentile of the dataset
+        Q<- quantile(df.num.mat1[,x], probs = c(0.25,0.75), na.rm = TRUE)
+        # Find the difference of the 75th and 25th percentiles
+        iqr <- IQR(df.num.mat1[,x], na.rm = TRUE)
+        # Find the cut-off ranges
+        up <-  Q[2]+1.5*iqr # Upper Range  
+        low <- Q[1]-1.5*iqr # Lower
+    
+    eliminated<- subset(df.num.mat1[,x],
+                        ((df.num.mat1[,x] > low) & (df.num.mat1[,x] < up)))
+    eliminated_rev<- subset(df.num.mat1[,4],
+                        ((df.num.mat1[,x] > low) & (df.num.mat1[,x] < up)))
+    
+      #remove cases of empty subset
+      if (length(eliminated) != 0) {
+        print(x)
+ 
+        r1.jk <- cor_with$estimate  # Correlation between variable and revenue measured with outliers
+        n1 <- length(df.num.mat1[ ,x])-sum(is.na(df.num.mat1[ ,x]))    # Size of full group
+        
+        #Find correlation without outliers
+
+        cor_elim<-cor.test(eliminated, eliminated_rev, method = "spearman",
+                     alternative = "two.sided", exact = FALSE)
+        r2.hm <- cor_elim$estimate  # Correlation between variable and revenue measured without outliers
+        n2 <- length(eliminated)-sum(is.na(eliminated))    # Size of subset group
+        
+        #Assuming a group after removal of outliers is considered independed by COCOR
+        print(colnames(df.num.mat1)[x])
+        print(cocor.indep.groups(r1.jk, r2.hm, n1, n2, data.name=c("Full", "Subset"),
+                           var.labels=c("Variable", "revenue", "Variable", "revenue")))
+        
+        }
+}
+```
+
+
+
+
+
+It can be seen that the there are relatively small differences in correlation after removing outliers (influential outliers) for the variables: budget, release_year, depart_* variables (except depart_Production & depart_Custom_Mkup_female). However, the effect on correlation values are minor (possibly with the  exception of depart_Camera where the correlation difference is slightly higher). Thus - in no case do the outliers generate significant correlation where it was not there before.
+
+As we saw above - the variables with more visible changes in histograms/distributions after removal of outliers include: popularity, keyword_cnt, sw_collection. But these changes are not significant enough to be considered as major distribution changes (more dominant for sw_collection.).
+
+So, these outliers should not be removed from the independent variables because they do not fit the criteria and do not appear to be entry errors (they seem a natural part of the population).
+
+## 4 generate data set without outliers
+Nothing to do
+
+#3.2 Missing data
+## 1 Missing values among variables
+
+We take the Sum of the multiplication of the column values as an indicator of the association between missing data in variables. The larger this parameter the more association is between the overall missing data in the studyied columns:
+
+```{r}
+df.miss = replicate( ncol(df.mat), numeric(ncol(df.mat)))
+for(i in 1:(ncol(df.mat)))
+  for(k in 1:(ncol(df.mat)))
+  {sums <- 0
+    for (j in 1:nrow(df.mat)) { sums <- sums + df.mat[j,i]*df.mat[j,k]}
+  df.miss[i,k]<-sums
+  }
+df.miss
+```
+
+It can be seen that the variables presenting the most missing values are the leading actors previous revenues. All other missing values are very sparse and probably missing completely at random. 
+
+Let us see how these missing variables affect each other:
+(ignoring revenue that was addressed above)
+
+```{r}
+hist(df$actor0_prev_revenue, breaks=30, main = 'full actor0_prev_revenue')
+plot(density(na.omit(df$actor0_prev_revenue)), main = 'full actor0_prev_revenue')
+rm(eliminated)
+eliminated<- subset(df,(is.na(df$actor0_prev_revenue) == FALSE) & (is.na(df$actor1_prev_revenue) == FALSE))
+hist(eliminated$revenue, breaks=30, main = 'actor0_prev_revenue subset by actor1_prev_revenue')
+plot(density(na.omit(eliminated$revenue)), main = 'actor0_prev_revenue subset by actor1_prev_revenue')
+
+hist(df$actor1_prev_revenue, breaks=30, main = 'full actor1_prev_revenue')
+plot(density(na.omit(df$actor1_prev_revenue)), main = 'full actor1_prev_revenue')
+rm(eliminated)
+eliminated<- subset(df,(is.na(df$actor1_prev_revenue) == FALSE) & (is.na(df$actor2_prev_revenue) == FALSE))
+hist(eliminated$actor1_prev_revenue, breaks=30, main = 'actor1_prev_revenue subset by actor2_prev_revenue')
+plot(density(na.omit(eliminated$actor1_prev_revenue)), main = 'actor1_prev_revenue subset by actor2_prev_revenue')
+```
+
+Sub-setting by leading actors previous revenues causes data to be missing from the other leading actors but from the higher paid actors more (right tail reduced, more for 0 segmented by 1 than for 1 segmented by 2). This means that when revenue data is missing, it is simultaneously missing from all leading actors and the revenue.
+
+```{r}
+hist(df$revenue, breaks=30, main = 'full revenue')
+plot(density(na.omit(df$revenue)), main = 'full revenue')
+rm(eliminated)
+eliminated<- subset(df,((is.na(df$actor0_prev_revenue) == FALSE) & is.na(df$actor1_prev_revenue) == FALSE) & (is.na(df$actor2_prev_revenue) == FALSE))
+hist(eliminated$revenue, breaks=30, main = 'revenue subset by leading actors revenue')
+plot(density(na.omit(eliminated$revenue)), main = 'revenue subset by leading actors revenue')
+```
+
+Despite the relatively large amount of data, the distributions are not markedly changed because removing one leading actor is similar to removing all of them.
+
+## 2 Potential mechanism of miissing data
+
+Table was generated above.
+It is very plausible that the leading actors did not want to provide their revenues or that the movie companies prohibit them from publicly distributing this data because they are highly correlated with the movie revenue itself being missing.
+
+## 3 Imputation
+
+I will use the mice package for the imputation because it appears the variables are missing completely at random.
+
+```{r}
+rm(imp)
+rm(eliminated)
+eliminated<- subset(df,(is.na(df$revenue) == FALSE))
+#imp <- mice(eliminated, method = "cart")
+imp <- mice(df, method = "cart")
+print(imp$imp$revenue)
+```
+
+
+#4 Imputing the database
+
+```{r}
+df.mat.imp<-data.matrix(complete(imp))
+df.mat.imp[!is.na(df.mat.imp)] = 0  #There is data available
+df.mat.imp[is.na(df.mat.imp)] = 1   #NA value
+
+par(mar = c(8, 2, 3, 2))  #bot, left, top, right
+par(oma = c(3, 3, 3, 3))
+heatmap(df.mat.imp, scale = "none")
+#pheatmap(df.mat, cutree_rows = 4)  #improved version
+```
+It is obvious that the database is now complete
+
+
+Flat file:
+https://github.com/Saar-Golan/DataScience/blob/main/stats/flat_file.csv
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
